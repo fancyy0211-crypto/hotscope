@@ -1,4 +1,5 @@
 import { HotTopic, Industry, GeneratedTopic, ContentDirection, StrategyKey } from './types';
+import { mapToContentCategory } from './services/contentCategory';
 
 const industries: Industry[] = [
   '互联网 / 科技',
@@ -42,6 +43,7 @@ const generateMockTopics = (): HotTopic[] => {
       source: '微博',
       popularity: Math.floor(Math.random() * 1000000),
       industry: industry,
+      contentCategory: mapToContentCategory(`微博热榜 #${i}: ${industry}数字化转型升级的实战案例分析`),
       tags: [industry],
       summary: `针对${industry}领域，分析了数字化转型过程中的核心痛点与成功路径。通过具体案例展示了如何利用新一代技术提高运营效率。`,
       trend,
@@ -87,6 +89,7 @@ export const refreshPool: HotTopic[] = [
     source: '微博',
     popularity: 920000,
     industry: '互联网 / 科技',
+    contentCategory: mapToContentCategory('微博热榜快讯：2026 互联网技术峰会公布首批大模型商用标准'),
     tags: ['互联网 / 科技'],
     summary: '全球多家科技巨头联合发布了 AI 大模型的行业准入及合规使用白皮书，这标志着产业进入规范化轨道。',
     trend: 'up',

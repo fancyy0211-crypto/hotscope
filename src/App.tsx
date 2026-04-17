@@ -65,8 +65,9 @@ import {
   HotTopic, 
   Industry, 
   Source,
+  ContentCategory,
   DigestPreference,
-  DigestScheduleConfig,
+  DigestSubscription,
   GeneratedTopic, 
   ScoreBreakdown, 
   ContentGoal,
@@ -408,6 +409,20 @@ const ALL_INDUSTRIES: Industry[] = [
   '职场 / HR / 管理'
 ];
 
+const CONTENT_CATEGORY_OPTIONS: ContentCategory[] = [
+  '文娱',
+  '社会',
+  '科技',
+  '体育',
+  '生活',
+  'ACG',
+  '财经',
+  '教育',
+  '汽车',
+  '游戏',
+  '更多'
+];
+
 const inferLifecycle = (topic: HotTopic): '上升期' | '爆发期' | '衰退期' | '平稳期' => {
   if (topic.trend === 'up' && topic.hotnessScore > 80) return '爆发期';
   if (topic.trend === 'up') return '上升期';
@@ -620,7 +635,8 @@ const isTopicRecommended = (topic: HotTopic) =>
 const EMAILJS_SERVICE_ID = 'service_zeup1ns';
 const EMAILJS_TEMPLATE_ID = 'template_9vjyydm';
 const EMAILJS_PUBLIC_KEY = 'dz2gqhh3h1KEfpokf';
-const DIGEST_CONFIGS_STORAGE_KEY = 'hotscope_digest_configs_v1';
+const DIGEST_SUBSCRIPTION_STORAGE_KEY = 'hotscope_digest_subscription_v1';
+const DAILY_FIXED_SEND_TIME = '09:00';
 
 const parseEmailList = (input: string): string[] => {
   const normalized = input.replace(/，/g, ',').replace(/\n/g, ',');
@@ -645,21 +661,6 @@ const validateEmailList = (emails: string[]): { valid: string[]; invalid: string
   return { valid, invalid };
 };
 
-const buildDigestConfigName = (
-  selectedPlatforms: Source[],
-  selectedIndustries: string[],
-  hour: string,
-  minute: string
-): string => {
-  const platformLabel =
-    selectedPlatforms.length >= ALL_PLATFORMS.length
-      ? `${selectedPlatforms.length}个平台`
-      : selectedPlatforms.slice(0, 2).join('/');
-  const industryLabel =
-    selectedIndustries.length > 0 ? selectedIndustries.slice(0, 2).join('/') : '全行业';
-  return `${platformLabel}｜${industryLabel}｜每日 ${hour}:${minute}`;
-};
-
 // --- Page: Home ---
 
 const HomePage = ({ 
@@ -669,7 +670,6 @@ const HomePage = ({
   onRefresh, 
   isRefreshing,
   myIndustries,
-  setMyIndustries,
   favorites,
   toggleFavorite,
   processed,
@@ -687,7 +687,6 @@ const HomePage = ({
   onRefresh: () => void,
   isRefreshing: boolean,
   myIndustries: Industry[],
-  setMyIndustries: (i: Industry[]) => void,
   favorites: Set<string>,
   toggleFavorite: (id: string, e: React.MouseEvent) => void,
   processed: Set<string>,
@@ -701,7 +700,8 @@ const HomePage = ({
 }) => {
   const [search, setSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState<Source | '所有平台'>('所有平台');
-  const [categoryFilter, setCategoryFilter] = useState<Industry | '全部'>('全部');
+  const [contentCategoryFilter, setContentCategoryFilter] = useState<ContentCategory | '全部'>('全部');
+  const [industryFilter, setIndustryFilter] = useState<Industry | '全部'>('全部');
   const [sortBy, setSortBy] = useState<'hotness' | 'growth' | 'opportunity'>('hotness');
   const [strategyView, setStrategyView] = useState<'all' | 'recommended' | 'fav' | 'generated'>('all');
   const [showRadar, setShowRadar] = useState(false);
@@ -711,28 +711,17 @@ const HomePage = ({
   const [copyingRecordId, setCopyingRecordId] = useState<string | null>(null);
   const PAGE_SIZE = 10;
 
-  const industryList: Industry[] = [
-    '互联网 / 科技', '消费品 / 电商', '金融 / 投资', '教育 / 教培',
-    '医疗 / 健康', '制造业 / 工业', '房地产 / 城市', '服务业',
-    '广告 / 传媒 / 内容', '职场 / HR / 管理'
-  ];
-
-  const toggleMyIndustry = (i: Industry) => {
-    setMyIndustries(myIndustries.includes(i) 
-      ? myIndustries.filter(item => item !== i) 
-      : [...myIndustries, i]
-    );
-  };
-
   const baseFilteredTopics = useMemo(() => {
     return topics.filter(t => {
       const matchSearch = t.title.toLowerCase().includes(search.toLowerCase()) ||
         t.summary.toLowerCase().includes(search.toLowerCase());
       const matchSource = sourceFilter === '所有平台' || t.source === sourceFilter;
-      const matchCategory = categoryFilter === '全部' || t.tags.includes(categoryFilter as Industry);
-      return matchSearch && matchSource && matchCategory;
+      const matchContentCategory = contentCategoryFilter === '全部' || t.contentCategory === contentCategoryFilter;
+      const primaryIndustry = getTopicPrimaryIndustry(t);
+      const matchIndustry = industryFilter === '全部' || primaryIndustry === industryFilter;
+      return matchSearch && matchSource && matchContentCategory && matchIndustry;
     });
-  }, [topics, search, sourceFilter, categoryFilter]);
+  }, [topics, search, sourceFilter, contentCategoryFilter, industryFilter]);
 
   const panelStats = useMemo(() => {
     return {
@@ -761,30 +750,26 @@ const HomePage = ({
     return result;
   }, [baseFilteredTopics, sortBy, strategyView, favorites, generatedRecordsByTopic, processed]);
 
-  const bestOpportunity = useMemo(() => {
-    // 今日最佳机会 = 当前筛选行业 ∩ 未使用热点，按综合评分排序
-    const sourceScoped = sourceFilter === '所有平台'
-      ? topics
-      : topics.filter((topic) => topic.source === sourceFilter);
+  const hasFilteredHotspots = filteredAndSortedTopics.length > 0;
 
-    const pool = categoryFilter !== '全部' 
-      ? sourceScoped.filter(t => t.tags.includes(categoryFilter as Industry))
-      : myIndustries.length > 0
-        ? sourceScoped.filter(t => t.tags.some(tag => myIndustries.includes(tag)))
-        : sourceScoped;
-    
-    const matched = pool
+  const bestOpportunity = useMemo(() => {
+    const matched = baseFilteredTopics
       .filter(t => !usedTopics.has(t.id))
       .sort((a, b) => getTopicCompositeScore(b) - getTopicCompositeScore(a))[0];
     
     if (matched) return { topic: matched, isCrossIndustry: false };
     
-    // Fallback: 跨行业使用同一套综合评分规则
-    const crossIndustry = sourceScoped
+    const sourceCategoryScoped = topics.filter((topic) => {
+      const matchSource = sourceFilter === '所有平台' || topic.source === sourceFilter;
+      const matchContentCategory = contentCategoryFilter === '全部' || topic.contentCategory === contentCategoryFilter;
+      return matchSource && matchContentCategory;
+    });
+
+    const crossIndustry = sourceCategoryScoped
       .filter(t => !usedTopics.has(t.id))
       .sort((a, b) => getTopicCompositeScore(b) - getTopicCompositeScore(a))[0];
     return crossIndustry ? { topic: crossIndustry, isCrossIndustry: true } : null;
-  }, [topics, sourceFilter, categoryFilter, myIndustries, usedTopics]);
+  }, [topics, baseFilteredTopics, sourceFilter, contentCategoryFilter, usedTopics]);
 
   const visibleTopics = filteredAndSortedTopics.slice(0, page * PAGE_SIZE);
 
@@ -819,7 +804,7 @@ const HomePage = ({
       .finally(() => setTimeout(() => setCopyingRecordId(null), 1500));
   };
 
-  const hasContextFilter = search.trim() || sourceFilter !== '所有平台' || categoryFilter !== '全部';
+  const hasContextFilter = search.trim() || sourceFilter !== '所有平台' || contentCategoryFilter !== '全部' || industryFilter !== '全部';
   const industryStats = useMemo(() => weiboDataService.getIndustryStats(), []);
   const trafficChartData = useMemo(() => weiboDataService.getIndustryTrafficByWindow(trafficWindow), [trafficWindow]);
   const radarTrafficData = useMemo(() => weiboDataService.getIndustryTrafficByWindow('24h'), []);
@@ -833,13 +818,14 @@ const HomePage = ({
     if (strategyView === 'fav') {
       return {
         title: hasContextFilter ? '当前筛选下暂无收藏热点' : '你还没有收藏热点',
-        description: hasContextFilter ? '可清空筛选或切换到今日热点继续探索' : '点击热点卡片右上角星标即可加入收藏库',
+        description: hasContextFilter ? '可先切换平台，再放宽关注行业与热点类型' : '点击热点卡片右上角星标即可加入收藏库',
         actionText: hasContextFilter ? '清空筛选' : '查看今日热点',
         action: () => {
           if (hasContextFilter) {
             setSearch('');
             setSourceFilter('所有平台');
-            setCategoryFilter('全部');
+            setContentCategoryFilter('全部');
+            setIndustryFilter('全部');
           }
           setStrategyView('all');
         }
@@ -856,13 +842,14 @@ const HomePage = ({
     if (strategyView === 'recommended') {
       return {
         title: '当前筛选下暂无推荐跟进热点',
-        description: hasContextFilter ? '建议放宽筛选条件，查看更多候选热点' : '可切换行业或等待下一次热点同步',
+        description: hasContextFilter ? '建议先切换平台，再放宽关注行业与热点类型' : '可切换平台或等待下一次热点同步',
         actionText: hasContextFilter ? '放宽筛选条件' : '查看全部热点',
         action: () => {
           if (hasContextFilter) {
             setSearch('');
             setSourceFilter('所有平台');
-            setCategoryFilter('全部');
+            setContentCategoryFilter('全部');
+            setIndustryFilter('全部');
           }
           setStrategyView('all');
         }
@@ -870,12 +857,13 @@ const HomePage = ({
     }
     return {
       title: '未发现匹配的趋势',
-      description: '尝试放宽搜索条件或切换至更多平台与类目',
+      description: '建议按顺序调整：平台 → 关注行业 → 热点类型',
       actionText: '重置筛选',
       action: () => {
         setSearch('');
         setSourceFilter('所有平台');
-        setCategoryFilter('全部');
+        setContentCategoryFilter('全部');
+        setIndustryFilter('全部');
         setStrategyView('all');
       }
     };
@@ -883,42 +871,34 @@ const HomePage = ({
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      {/* Global Industry Bar - Professional Multi-select */}
-      <div className="h-12 bg-sleek-text-main shrink-0 flex items-center px-6 gap-6 overflow-x-auto no-scrollbar scroll-smooth">
-        <div className="flex items-center gap-2 shrink-0">
-          <Target className="w-3.5 h-3.5 text-sleek-accent" />
-          <span className="text-[10px] font-bold text-white/50 uppercase tracking-widest whitespace-nowrap">关注行业 Multi-Industry</span>
-        </div>
-        <div className="flex gap-2">
-          {industryList.map(i => (
-            <button 
-              key={i}
-              onClick={() => toggleMyIndustry(i)}
-              className={`text-[11px] font-bold px-3 py-1 rounded-full transition-all whitespace-nowrap border ${
-                myIndustries.includes(i) 
-                ? 'bg-sleek-accent text-white border-sleek-accent' 
-                : 'text-white/40 border-white/10 hover:border-white/30 hover:text-white/80'
-              }`}
-            >
-              {i}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <header className="h-14 border-b border-sleek-border flex items-center px-6 justify-between shrink-0 bg-white shadow-sm z-10">
+      <header className="h-14 border-b border-[#3B3B35] flex items-center px-6 justify-between shrink-0 bg-[#2F2F2B] shadow-sm z-10">
         <div className="flex items-center gap-6">
-          <div className="font-bold text-sleek-text-main flex items-center gap-2 text-sm italic uppercase tracking-tighter">
+          <div className="font-bold text-white/90 flex items-center gap-2 text-sm italic uppercase tracking-tighter">
             <Flame className="w-4 h-4 text-rose-500" />
             HOT SCOPE
+          </div>
+          <div className="flex items-center gap-1 p-1 rounded-xl border border-[#47473F] bg-[#242420]">
+            {(['所有平台', ...ALL_PLATFORMS] as (Source | '所有平台')[]).map((platform) => (
+              <button
+                key={platform}
+                onClick={() => setSourceFilter(platform)}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
+                  sourceFilter === platform
+                    ? 'bg-[rgba(59,130,246,0.1)] text-[#3B82F6] border-[#BFDBFE]'
+                    : 'bg-transparent border-transparent text-white/65 hover:bg-white/10 hover:text-white/90'
+                }`}
+              >
+                {platform}
+              </button>
+            ))}
           </div>
           <button 
             onClick={onRefresh}
             disabled={isRefreshing}
             className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold transition-all border shadow-sm ${
               isRefreshing 
-              ? 'bg-gray-50 text-gray-400 cursor-not-allowed border-gray-100' 
-              : 'bg-white text-sleek-text-main border-sleek-border hover:border-sleek-accent hover:text-sleek-accent'
+              ? 'bg-white/5 text-white/35 cursor-not-allowed border-white/10' 
+              : 'bg-white/5 text-white/85 border-white/15 hover:border-sleek-accent hover:text-sleek-accent'
             }`}
           >
             <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -927,7 +907,7 @@ const HomePage = ({
         </div>
         
         <div className="flex items-center gap-8">
-          <div className="flex items-center gap-3 bg-sleek-sidebar p-1 rounded-lg border border-sleek-border">
+          <div className="flex items-center gap-3 bg-[#242420] p-1 rounded-lg border border-[#47473F]">
             {[
               {id: 'hotness', label: '热度优先', icon: Flame},
               {id: 'growth', label: '急剧上升', icon: TrendingUp},
@@ -937,7 +917,7 @@ const HomePage = ({
                 key={s.id}
                 onClick={() => setSortBy(s.id as any)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all ${
-                  sortBy === s.id ? 'bg-white shadow-md text-sleek-accent' : 'text-sleek-text-secondary hover:bg-sleek-hover/50'
+                  sortBy === s.id ? 'bg-[rgba(59,130,246,0.1)] text-[#3B82F6] border border-[#BFDBFE]' : 'text-white/65 hover:bg-white/10 hover:text-white/90'
                 }`}
               >
                 <s.icon className="w-3 h-3" />
@@ -945,7 +925,7 @@ const HomePage = ({
               </button>
             ))}
           </div>
-          <div className="text-[11px] text-sleek-text-secondary font-mono flex items-center gap-2">
+          <div className="text-[11px] text-white/60 font-mono flex items-center gap-2">
             <Clock className="w-3 h-3" />
             {lastUpdated}
           </div>
@@ -981,31 +961,48 @@ const HomePage = ({
               />
             </div>
             
-            <div className="flex items-center gap-3">
-              <div className="flex-1 relative">
-                <select
-                  className="w-full appearance-none bg-sleek-sidebar border-0 px-3 py-1.5 rounded-lg text-[11px] font-bold text-sleek-text-main focus:ring-1 focus:ring-sleek-accent/20 cursor-pointer"
-                  value={sourceFilter}
-                  onChange={(e) => setSourceFilter(e.target.value as Source | '所有平台')}
-                >
-                  <option value="所有平台">所有平台</option>
-                  <option value="微博">微博</option>
-                  <option value="抖音">抖音</option>
-                  <option value="知乎">知乎</option>
-                  <option value="小红书">小红书</option>
-                </select>
-                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-sleek-text-secondary pointer-events-none" />
+            <div className="space-y-3">
+              <div className="rounded-xl border border-sleek-accent/20 bg-sleek-accent-soft/40 p-3 space-y-2">
+                <div className="flex items-center gap-2 text-[11px] font-black text-sleek-accent">
+                  <Target className="w-3 h-3" />
+                  关注行业（主筛选）
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(['全部', ...ALL_INDUSTRIES] as (Industry | '全部')[]).map((item) => (
+                    <button
+                      key={item}
+                      onClick={() => setIndustryFilter(item)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all ${
+                        industryFilter === item
+                          ? 'bg-sleek-accent text-white shadow-sm'
+                          : 'bg-white text-sleek-text-secondary border border-sleek-border hover:text-sleek-text-main'
+                      }`}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="flex-1 relative">
-                <select 
-                  className="w-full appearance-none bg-sleek-sidebar border-0 px-3 py-1.5 rounded-lg text-[11px] font-bold text-sleek-text-main focus:ring-1 focus:ring-sleek-accent/20 cursor-pointer"
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value as any)}
-                >
-                  <option value="全部">所有类目 (全部)</option>
-                  {industryList.map(i => <option key={i} value={i}>{i}</option>)}
-                </select>
-                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-sleek-text-secondary pointer-events-none" />
+              <div className="rounded-xl border border-sleek-border bg-white p-3 space-y-2">
+                <div className="flex items-center gap-2 text-[11px] font-bold text-sleek-text-secondary">
+                  <Filter className="w-3 h-3" />
+                  热点类型（辅筛选）
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(['全部', ...CONTENT_CATEGORY_OPTIONS] as (ContentCategory | '全部')[]).map((item) => (
+                    <button
+                      key={item}
+                      onClick={() => setContentCategoryFilter(item)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-all ${
+                        contentCategoryFilter === item
+                          ? 'bg-sleek-text-main text-white shadow-sm'
+                          : 'bg-sleek-sidebar text-sleek-text-secondary border border-sleek-border hover:text-sleek-text-main'
+                      }`}
+                    >
+                      {item}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
@@ -1016,6 +1013,7 @@ const HomePage = ({
                 {visibleTopics.map((topic) => {
                   const generatedRecords = generatedRecordsByTopic[topic.id] || [];
                   const hasGeneratedRecord = generatedRecords.length > 0 || processed.has(topic.id);
+                  const primaryIndustry = getTopicPrimaryIndustry(topic);
                   return (
                   <motion.div 
                     layoutId={topic.id}
@@ -1074,13 +1072,16 @@ const HomePage = ({
                        {topic.title}
                     </h3>
 
-                    <div className="flex items-center gap-3 mb-4">
-                      {topic.tags.map(tag => (
-                        <div key={tag} className="flex items-center gap-1.5">
-                           <div className={`w-1.5 h-1.5 rounded-full ${myIndustries.includes(tag) ? 'bg-sleek-accent shadow-[0_0_8px_rgba(0,102,255,0.5)]' : 'bg-gray-300'}`} />
-                           <span className={`text-[11px] font-bold ${myIndustries.includes(tag) ? 'text-sleek-accent' : 'text-sleek-text-secondary'}`}>{tag}</span>
-                        </div>
-                      ))}
+                    <div className="flex items-center gap-2 flex-wrap mb-4">
+                      <span className="text-[10px] font-black text-sleek-accent bg-sleek-accent-soft px-2 py-0.5 rounded border border-sleek-accent/10">
+                        #{topic.contentCategory}
+                      </span>
+                      <span className="text-[10px] font-bold text-sleek-text-secondary bg-sleek-sidebar px-2 py-0.5 rounded border border-sleek-border">
+                        平台：{topic.source}
+                      </span>
+                      <span className="text-[10px] font-bold text-sleek-text-secondary bg-sleek-sidebar px-2 py-0.5 rounded border border-sleek-border">
+                        行业：{primaryIndustry}
+                      </span>
                     </div>
                     
                     <div className="grid grid-cols-2 gap-px bg-sleek-border rounded-lg overflow-hidden border border-sleek-border">
@@ -1224,27 +1225,35 @@ const HomePage = ({
                      <div className="space-y-1.5">
                         <div className="flex items-center gap-2 mb-1">
                           <h4 className="text-lg font-black leading-tight">
-                            {bestOpportunity?.isCrossIndustry ? '🌐 跨行业推荐' : '🔥 今日最佳机会'}：
-                            {bestOpportunity?.topic.tags[0] || '暂无可用热点'}
+                            {hasFilteredHotspots && bestOpportunity?.topic
+                              ? `${bestOpportunity?.isCrossIndustry ? '🌐 跨行业推荐' : '🔥 今日最佳机会'}：${getTopicPrimaryIndustry(bestOpportunity.topic)}`
+                              : '今日暂无可用热点'}
                           </h4>
                         </div>
                         <p className="text-xs font-semibold text-white/70">
-                          {bestOpportunity?.topic
+                          {hasFilteredHotspots && bestOpportunity?.topic
                             ? `发现「${bestOpportunity.topic.title.substring(0, 15)}...」${bestOpportunity?.isCrossIndustry ? '虽非主选行业，但潜力和适配度极高' : '符合当前行业筛选，建议立即切入'}`
-                            : '暂无可生成热点，请先同步或取消已发布标记。'}
+                            : '请尝试切换平台或调整筛选条件。'}
                         </p>
                      </div>
-                     <div className="flex items-center gap-4 text-[10px] font-bold bg-white/10 w-fit px-3 py-1.5 rounded-lg border border-white/20">
-                        <div className="flex items-center gap-1.5"><Clock className="w-3 h-3 text-yellow-300" /> 建议 12h 内发布</div>
-                        <div className="w-px h-3 bg-white/20" />
-                        <div className="flex items-center gap-1.5"><TrendingUp className="w-3 h-3 text-emerald-300" /> 预计流量：极高</div>
-                     </div>
+                     {hasFilteredHotspots && bestOpportunity?.topic && (
+                       <div className="flex items-center gap-4 text-[10px] font-bold bg-white/10 w-fit px-3 py-1.5 rounded-lg border border-white/20">
+                          <div className="flex items-center gap-1.5"><Clock className="w-3 h-3 text-yellow-300" /> 建议 12h 内发布</div>
+                          <div className="w-px h-3 bg-white/20" />
+                          <div className="flex items-center gap-1.5"><TrendingUp className="w-3 h-3 text-emerald-300" /> 预计流量：极高</div>
+                       </div>
+                     )}
                      <button 
                        onClick={(e) => {
-                          if (bestOpportunity?.topic) quickGenerateWithFeedback(bestOpportunity.topic, e);
-                          else showToast('当前暂无可生成热点', 'info');
+                          if (hasFilteredHotspots && bestOpportunity?.topic) quickGenerateWithFeedback(bestOpportunity.topic, e);
+                          else showToast('当前暂无可生成热点，请先调整筛选条件', 'info');
                         }}
-                       className="w-full bg-white text-sleek-accent py-3.5 rounded-xl text-sm font-black shadow-lg hover:shadow-white/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                       className={`w-full py-3.5 rounded-xl text-sm font-black transition-all flex items-center justify-center gap-2 ${
+                        hasFilteredHotspots && bestOpportunity?.topic
+                          ? 'bg-white text-sleek-accent shadow-lg hover:shadow-white/20 active:scale-[0.98]'
+                          : 'bg-white/70 text-sleek-accent/60 border border-white/30 cursor-not-allowed'
+                       }`}
+                       disabled={!hasFilteredHotspots || !bestOpportunity?.topic}
                      >
                        <Sparkles className="w-4 h-4 animate-pulse" /> 一键生成选题方案
                      </button>
@@ -1326,7 +1335,7 @@ const HomePage = ({
                        <Activity className="w-5 h-5 text-sleek-accent" />
                        行业流量实时监控
                     </h3>
-                    <p className="text-xs text-sleek-text-secondary font-medium italic">智能算法动态追踪 {myIndustries.length > 0 ? myIndustries[0] : '全行业'} 趋势水位</p>
+                    <p className="text-xs text-sleek-text-secondary font-medium italic">智能算法动态追踪 {industryFilter === '全部' ? '全行业' : industryFilter} 趋势水位</p>
                     <p className="text-[11px] text-sleek-accent font-semibold">{trafficInsightText}</p>
                   </div>
                   <div className="flex gap-1.5">
@@ -2518,94 +2527,28 @@ const SettingsPage = ({
   showToast,
   digestEmail,
   setDigestEmail,
-  digestHour,
-  setDigestHour,
-  digestMinute,
-  setDigestMinute,
+  digestEnabled,
+  setDigestEnabled,
   digestPreference,
   setDigestPreference
 }: {
   showToast: (m: string, type?: 'success' | 'info') => void,
   digestEmail: string,
   setDigestEmail: (email: string) => void,
-  digestHour: string,
-  setDigestHour: (val: string) => void,
-  digestMinute: string,
-  setDigestMinute: (val: string) => void,
+  digestEnabled: boolean,
+  setDigestEnabled: (next: boolean) => void,
   digestPreference: DigestPreference,
   setDigestPreference: (next: DigestPreference) => void
 }) => {
   const [isSaving, setIsSaving] = useState(false);
-  const [sendingTarget, setSendingTarget] = useState<string | null>(null);
-  const [configs, setConfigs] = useState<DigestScheduleConfig[]>([]);
-  const [editingConfigId, setEditingConfigId] = useState<string | null>(null);
-
-  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
-  const minutes = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'));
-  const time = `${digestHour}:${digestMinute}`;
-  const editingConfig = configs.find((cfg) => cfg.id === editingConfigId) || null;
-
-  useEffect(() => {
-    const loadConfigsFromServer = async () => {
-      try {
-        const resp = await fetch('/api/digest-configs');
-        if (!resp.ok) throw new Error(`load failed: ${resp.status}`);
-        const payload = await resp.json();
-        if (Array.isArray(payload?.configs)) {
-          setConfigs(payload.configs);
-          return;
-        }
-      } catch (error) {
-        console.error('[DigestConfig] failed to load from server, fallback local:', error);
-      }
-      try {
-        const raw = localStorage.getItem(DIGEST_CONFIGS_STORAGE_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          setConfigs(parsed);
-        }
-      } catch (error) {
-        console.error('[DigestConfig] failed to load from localStorage:', error);
-      }
-    };
-    loadConfigsFromServer();
-  }, []);
-
-  const syncConfigs = async (nextConfigs: DigestScheduleConfig[]) => {
-    setConfigs(nextConfigs);
-    try {
-      localStorage.setItem(DIGEST_CONFIGS_STORAGE_KEY, JSON.stringify(nextConfigs));
-    } catch (error) {
-      console.error('[DigestConfig] failed to save into localStorage:', error);
-    }
-    try {
-      const resp = await fetch('/api/digest-configs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ configs: nextConfigs })
-      });
-      if (!resp.ok) {
-        throw new Error(`sync failed: ${resp.status}`);
-      }
-    } catch (error) {
-      console.error('[DigestConfig] failed to sync to server:', error);
-      showToast('配置已本地保存，但服务端同步失败（定时发送可能不可用）', 'info');
-    }
-  };
-
-  const formatEmailSummary = (emails: string[]) => {
-    if (emails.length <= 2) return emails.join(' / ');
-    return `${emails.slice(0, 2).join(' / ')} 等 ${emails.length} 个邮箱`;
-  };
+  const [sendingNow, setSendingNow] = useState(false);
 
   const sendDigestForConfig = async (
     emailsInput: string[] | string,
     selectedPlatforms: Source[],
-    selectedIndustries: string[],
-    targetKey: string
+    selectedIndustries: string[]
   ) => {
-    setSendingTarget(targetKey);
+    setSendingNow(true);
     try {
       const parsedEmails = Array.isArray(emailsInput) ? Array.from(new Set(emailsInput)) : parseEmailList(emailsInput);
       const { valid, invalid } = validateEmailList(parsedEmails);
@@ -2673,7 +2616,7 @@ const SettingsPage = ({
       console.error('[DigestMail] send failed:', error);
       showToast('简报发送失败，请检查 EmailJS 模板变量与配置', 'info');
     } finally {
-      setSendingTarget(null);
+      setSendingNow(false);
     }
   };
 
@@ -2690,28 +2633,23 @@ const SettingsPage = ({
       showToast('保存失败：请至少填写 1 个有效邮箱', 'info');
       return;
     }
+    setDigestEmail(valid.join('\n'));
 
-    const now = new Date().toISOString();
-    const nextConfig: DigestScheduleConfig = {
-      id: editingConfigId || `digest-${Date.now()}`,
-      name: buildDigestConfigName(digestPreference.selectedPlatforms, digestPreference.selectedIndustries, digestHour, digestMinute),
+    const nextSubscription: DigestSubscription = {
+      enabled: digestEnabled,
       emails: valid,
-      hour: digestHour,
-      minute: digestMinute,
       selectedPlatforms: [...digestPreference.selectedPlatforms],
-      selectedIndustries: [...digestPreference.selectedIndustries],
-      enabled: editingConfig ? editingConfig.enabled : true,
-      createdAt: editingConfig ? editingConfig.createdAt : now,
-      updatedAt: now
+      selectedIndustries: [...digestPreference.selectedIndustries]
     };
 
-    setDigestEmail(valid.join('\n'));
-    const nextConfigs = editingConfigId
-      ? configs.map((cfg) => (cfg.id === editingConfigId ? nextConfig : cfg))
-      : [nextConfig, ...configs];
-    void syncConfigs(nextConfigs);
+    try {
+      localStorage.setItem(DIGEST_SUBSCRIPTION_STORAGE_KEY, JSON.stringify(nextSubscription));
+    } catch (error) {
+      console.error('[DigestSubscription] save failed:', error);
+    }
+
     setIsSaving(false);
-    showToast(editingConfigId ? '推送配置已更新' : '推送配置已保存', 'success');
+    showToast('订阅设置已保存', 'success');
   };
 
   const togglePlatform = (platform: Source) => {
@@ -2740,66 +2678,38 @@ const SettingsPage = ({
     sendDigestForConfig(
       digestEmail,
       digestPreference.selectedPlatforms,
-      digestPreference.selectedIndustries,
-      'form'
+      digestPreference.selectedIndustries
     );
-
-  const handleEditConfig = (config: DigestScheduleConfig) => {
-    setEditingConfigId(config.id);
-    setDigestEmail(config.emails.join('\n'));
-    setDigestHour(config.hour);
-    setDigestMinute(config.minute);
-    setDigestPreference({
-      selectedPlatforms: [...config.selectedPlatforms],
-      selectedIndustries: [...config.selectedIndustries]
-    });
-    showToast(`已加载配置：${config.name}`, 'info');
-  };
-
-  const handleToggleEnabled = (configId: string) => {
-    const nextConfigs = configs.map((cfg) =>
-      cfg.id === configId
-        ? { ...cfg, enabled: !cfg.enabled, updatedAt: new Date().toISOString() }
-        : cfg
-    );
-    void syncConfigs(nextConfigs);
-  };
-
-  const handleDeleteConfig = (configId: string) => {
-    const target = configs.find((cfg) => cfg.id === configId);
-    if (!target) return;
-    const ok = window.confirm(`确认删除配置「${target.name}」吗？`);
-    if (!ok) return;
-    const nextConfigs = configs.filter((cfg) => cfg.id !== configId);
-    void syncConfigs(nextConfigs);
-    if (editingConfigId === configId) {
-      setEditingConfigId(null);
-    }
-    showToast('配置已删除', 'success');
-  };
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-white">
       <header className="h-14 border-b border-sleek-border flex items-center px-6 justify-between shrink-0">
-        <div className="font-semibold text-sleek-text-main">系统设置</div>
+        <div className="font-semibold text-sleek-text-main">每日简报订阅设置</div>
       </header>
 
       <div className="flex-1 overflow-y-auto p-12">
         <div className="max-w-xl mx-auto space-y-12">
-          {editingConfig && (
-            <section className="space-y-3">
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-                <div className="text-xs font-black text-amber-800">正在编辑：{editingConfig.name}</div>
-                <div className="text-[11px] text-amber-700 mt-1">保存后将更新原配置，不会新增重复项。</div>
+          <section className="space-y-4">
+            <div className="rounded-xl border border-sleek-border bg-sleek-sidebar px-4 py-4 space-y-2">
+              <div className="text-sm font-black text-sleek-text-main">每日固定时间：早上 {DAILY_FIXED_SEND_TIME} 自动发送</div>
+              <div className="text-xs text-sleek-text-secondary">
+                当前订阅状态：
+                <span className={`ml-1 font-black ${digestEnabled ? 'text-emerald-600' : 'text-gray-500'}`}>
+                  {digestEnabled ? '已开启' : '已关闭'}
+                </span>
               </div>
               <button
-                onClick={() => setEditingConfigId(null)}
-                className="text-xs font-bold text-sleek-text-secondary hover:text-sleek-accent"
+                onClick={() => setDigestEnabled(!digestEnabled)}
+                className={`px-4 py-2 rounded-lg text-xs font-black border transition-all ${
+                  digestEnabled
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                    : 'bg-white border-sleek-border text-sleek-text-secondary'
+                }`}
               >
-                退出编辑模式
+                {digestEnabled ? '关闭订阅' : '开启订阅'}
               </button>
-            </section>
-          )}
+            </div>
+          </section>
 
           <section className="space-y-4">
             <div className="flex items-center gap-2">
@@ -2813,54 +2723,6 @@ const SettingsPage = ({
               onChange={(e) => setDigestEmail(e.target.value)}
             />
             <p className="text-xs text-sleek-text-secondary">支持逗号、中文逗号、换行分隔。保存时会自动去重并过滤无效邮箱。</p>
-          </section>
-
-          <section className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-sleek-accent" />
-              <h4 className="text-sm font-bold text-sleek-text-main uppercase tracking-wider">每日推送时间</h4>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <div className="text-[11px] font-bold text-sleek-text-secondary uppercase">小时</div>
-                <div className="h-36 overflow-y-auto rounded-lg border border-sleek-border bg-sleek-sidebar p-1 snap-y snap-mandatory">
-                  {hours.map((h) => (
-                    <button
-                      key={h}
-                      onClick={() => setDigestHour(h)}
-                      className={`w-full h-8 rounded-md text-sm font-black transition-all snap-center ${
-                        digestHour === h
-                          ? 'bg-sleek-text-main text-white shadow'
-                          : 'text-sleek-text-secondary hover:bg-white'
-                      }`}
-                    >
-                      {h}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <div className="text-[11px] font-bold text-sleek-text-secondary uppercase">分钟</div>
-                <div className="h-36 overflow-y-auto rounded-lg border border-sleek-border bg-sleek-sidebar p-1 snap-y snap-mandatory">
-                  {minutes.map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setDigestMinute(m)}
-                      className={`w-full h-8 rounded-md text-sm font-black transition-all snap-center ${
-                        digestMinute === m
-                          ? 'bg-sleek-text-main text-white shadow'
-                          : 'text-sleek-text-secondary hover:bg-white'
-                      }`}
-                    >
-                      {m}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="text-xs font-bold text-sleek-accent bg-sleek-accent-soft border border-sleek-accent/20 rounded-lg px-3 py-2">
-              当前推送时间：每天 {time}
-            </div>
           </section>
 
           <section className="space-y-4">
@@ -2921,70 +2783,6 @@ const SettingsPage = ({
             </div>
           </section>
 
-          <section className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Bookmark className="w-4 h-4 text-sleek-accent" />
-              <h4 className="text-sm font-bold text-sleek-text-main uppercase tracking-wider">已保存推送配置</h4>
-            </div>
-            <div className="space-y-3">
-              {configs.length === 0 ? (
-                <div className="text-xs text-sleek-text-secondary bg-sleek-sidebar border border-sleek-border rounded-lg px-3 py-3">
-                  暂无已保存配置，先填写上方表单并点击「保存设置」。
-                </div>
-              ) : (
-                configs.map((config) => (
-                  <div key={config.id} className="border border-sleek-border rounded-xl p-3 space-y-3 bg-white">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="text-xs font-black text-sleek-text-main">{config.name}</div>
-                        <div className="text-[11px] text-sleek-text-secondary">邮箱：{formatEmailSummary(config.emails)}</div>
-                        <div className="text-[11px] text-sleek-text-secondary">时间：每日 {config.hour}:{config.minute}</div>
-                        <div className="text-[11px] text-sleek-text-secondary">平台：{config.selectedPlatforms.join(' / ')}</div>
-                        <div className="text-[11px] text-sleek-text-secondary">行业：{config.selectedIndustries.join(' / ')}</div>
-                      </div>
-                      <span className={`text-[10px] font-black px-2 py-1 rounded-full border ${
-                        config.enabled ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-gray-600 bg-gray-50 border-gray-200'
-                      }`}>
-                        {config.enabled ? '启用中' : '已暂停'}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => handleEditConfig(config)}
-                        className="text-xs font-bold py-2 rounded-lg border border-sleek-border hover:bg-sleek-sidebar"
-                      >
-                        编辑
-                      </button>
-                      <button
-                        onClick={() => handleToggleEnabled(config.id)}
-                        className="text-xs font-bold py-2 rounded-lg border border-sleek-border hover:bg-sleek-sidebar"
-                      >
-                        {config.enabled ? '暂停' : '启用'}
-                      </button>
-                      <button
-                        onClick={() => sendDigestForConfig(config.emails, config.selectedPlatforms, config.selectedIndustries, config.id)}
-                        disabled={sendingTarget === config.id}
-                        className={`text-xs font-bold py-2 rounded-lg border transition-all ${
-                          sendingTarget === config.id
-                            ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                            : 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
-                        }`}
-                      >
-                        {sendingTarget === config.id ? '发送中...' : '立即发送今日简报'}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteConfig(config.id)}
-                        className="text-xs font-bold py-2 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50"
-                      >
-                        删除
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-
           <div className="pt-8 border-t border-sleek-border">
             <div className="flex items-center gap-3">
               <button
@@ -2996,18 +2794,18 @@ const SettingsPage = ({
                     : 'bg-sleek-accent text-white hover:bg-blue-700'
                 }`}
               >
-                {isSaving ? '保存中...' : editingConfigId ? '更新配置' : '保存设置'}
+                {isSaving ? '保存中...' : '保存订阅设置'}
               </button>
               <button
                 onClick={handleSendDigestMail}
-                disabled={sendingTarget === 'form'}
+                disabled={sendingNow}
                 className={`px-5 py-2.5 rounded-lg font-bold transition-all text-sm border ${
-                  sendingTarget === 'form'
+                  sendingNow
                     ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
                     : 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700'
                 }`}
               >
-                {sendingTarget === 'form' ? '发送中...' : '立即发送今日简报'}
+                {sendingNow ? '发送中...' : '立即发送今日简报'}
               </button>
             </div>
           </div>
@@ -3033,8 +2831,7 @@ export default function App() {
   // Global Context States
   const [myIndustries, setMyIndustries] = useState<Industry[]>(['互联网 / 科技', '消费品 / 电商']);
   const [digestEmail, setDigestEmail] = useState('');
-  const [digestHour, setDigestHour] = useState('09');
-  const [digestMinute, setDigestMinute] = useState('00');
+  const [digestEnabled, setDigestEnabled] = useState(true);
   const [digestPreference, setDigestPreference] = useState<DigestPreference>({
     selectedPlatforms: [...ALL_PLATFORMS],
     selectedIndustries: [...ALL_INDUSTRIES]
@@ -3065,6 +2862,24 @@ export default function App() {
     setNotification({ show: true, msg, type });
     setTimeout(() => setNotification({ show: false, msg: '', type: 'info' }), 3000);
   };
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DIGEST_SUBSCRIPTION_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<DigestSubscription>;
+      if (typeof parsed?.enabled === 'boolean') setDigestEnabled(parsed.enabled);
+      if (Array.isArray(parsed?.emails)) setDigestEmail(parsed.emails.join('\n'));
+      if (Array.isArray(parsed?.selectedPlatforms) && parsed.selectedPlatforms.length > 0) {
+        setDigestPreference((prev) => ({ ...prev, selectedPlatforms: parsed.selectedPlatforms as Source[] }));
+      }
+      if (Array.isArray(parsed?.selectedIndustries) && parsed.selectedIndustries.length > 0) {
+        setDigestPreference((prev) => ({ ...prev, selectedIndustries: parsed.selectedIndustries }));
+      }
+    } catch (error) {
+      console.error('[DigestSubscription] load failed:', error);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -3195,7 +3010,6 @@ export default function App() {
                     onRefresh={handleRefresh}
                     isRefreshing={isRefreshing}
                     myIndustries={myIndustries}
-                    setMyIndustries={setMyIndustries}
                     favorites={favorites}
                     toggleFavorite={(id, e) => {
                       toggleFavorite(id, e);
@@ -3248,10 +3062,8 @@ export default function App() {
                 showToast={showToast}
                 digestEmail={digestEmail}
                 setDigestEmail={setDigestEmail}
-                digestHour={digestHour}
-                setDigestHour={setDigestHour}
-                digestMinute={digestMinute}
-                setDigestMinute={setDigestMinute}
+                digestEnabled={digestEnabled}
+                setDigestEnabled={setDigestEnabled}
                 digestPreference={digestPreference}
                 setDigestPreference={setDigestPreference}
               />

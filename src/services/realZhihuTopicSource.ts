@@ -1,4 +1,5 @@
 import { HotTopic, Industry, Source, TrendDataPoint } from '../types';
+import { mapToContentCategory } from './contentCategory';
 
 interface PlatformTopicSourceLike {
   fetchCurrentTopics(): Promise<HotTopic[]>;
@@ -64,6 +65,7 @@ const mapToTopic = (item: ApiTopicItem, index: number, maxHot: number): HotTopic
   const hotnessScore = clampScore((hotValue / maxHot) * 100);
   const opportunityScore = clampScore(100 - index);
   const industry = pickIndustry(item.title);
+  const contentCategory = mapToContentCategory(item.title);
 
   return {
     id: `zhihu-${index + 1}-${hashTitle(item.title)}`,
@@ -72,6 +74,7 @@ const mapToTopic = (item: ApiTopicItem, index: number, maxHot: number): HotTopic
     link: item.link,
     popularity: hotValue,
     industry: industry,
+    contentCategory,
     tags: [industry],
     summary: `知乎热点「${item.title}」当前热度值约 ${hotValue}，建议结合问答视角与观点冲突快速切入。`,
     trend: 'up',

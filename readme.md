@@ -75,19 +75,19 @@ HotScope 不是一个“展示工具”，而是一个**决策工具**。
 
 项目已支持服务端定时发送（页面关闭后仍可发送）：
 
-- 配置管理 API：`/api/digest-configs`
 - 定时任务 API：`/api/cron-digest`
-- 定时规则：`vercel.json`（每分钟触发一次）
+- 定时规则：由外部 cron（如 cron-job.org）在固定时间触发 `/api/cron-digest`
 
 ### 必需环境变量（Vercel Project Settings）
 
+- `CRON_SECRET`
 - `EMAILJS_SERVICE_ID`
 - `EMAILJS_TEMPLATE_ID`
 - `EMAILJS_PUBLIC_KEY`
-- `KV_REST_API_URL`
-- `KV_REST_API_TOKEN`
-- `CRON_SECRET`（可选，用于手动触发 cron 接口鉴权）
+- `DAILY_DIGEST_EMAILS`（如：`a@gmail.com,b@163.com`）
+- `DAILY_DIGEST_PLATFORMS`（如：`微博,抖音,知乎,小红书`）
+- `DAILY_DIGEST_INDUSTRIES`（如：`互联网 / 科技,消费品 / 电商`，可留空表示不过滤行业）
 
 说明：
-- 若未配置 KV，服务端会退回内存存储，重启后配置会丢失，不适合生产。
-- 生产环境建议必须配置 KV，以保证定时任务读取到持久化配置。
+- 不再支持用户自定义发送时间与多配置管理。
+- 自动发送时间由外部 cron 决定；接口收到触发后直接发送一次“今日热点简报”。

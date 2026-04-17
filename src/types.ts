@@ -14,6 +14,18 @@ export type Industry =
 
 export type RecommendationLevel = '强推荐' | '可跟进' | '不建议';
 export type ContentFormat = '图文' | '短视频';
+export type ContentCategory =
+  | '文娱'
+  | '生活'
+  | '社会'
+  | '体育'
+  | 'ACG'
+  | '科技'
+  | '财经'
+  | '教育'
+  | '汽车'
+  | '游戏'
+  | '更多';
 export type ContentStyle = '干货型' | '情绪共鸣' | '争议观点' | '热点解读';
 export type ContentDirection = '教程类' | '观点类' | '案例拆解' | '实操类';
 export type ContentGoal = '引流' | '转化' | '品牌' | '涨粉';
@@ -24,17 +36,11 @@ export type DigestPreference = {
   selectedIndustries: string[];
 };
 
-export type DigestScheduleConfig = {
-  id: string;
-  name: string;
+export type DigestSubscription = {
+  enabled: boolean;
   emails: string[];
-  hour: string;
-  minute: string;
   selectedPlatforms: Source[];
   selectedIndustries: string[];
-  enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
 };
 
 export interface ScoreBreakdown {
@@ -70,6 +76,7 @@ export interface HotTopic {
   link?: string;
   popularity: number;
   industry?: Industry;
+  contentCategory: ContentCategory;
   tags: Industry[];
   summary: string;
   trend: 'up' | 'down' | 'stable';

@@ -1,4 +1,5 @@
 import { GeneratedTopic, HotTopic, Industry, StrategyKey, TrendDataPoint } from '../types';
+import { mapToContentCategory } from './contentCategory';
 
 type TrafficWindow = '24h' | '7d' | '30d';
 
@@ -77,6 +78,7 @@ const mapToHotTopic = (item: Weibo60sItem, index: number, maxHot: number): HotTo
   const hotnessScore = clampScore((safeHot / maxHot) * 100);
   const opportunityScore = clampScore(100 - index);
   const industry = pickIndustry(item.title);
+  const contentCategory = mapToContentCategory(item.title);
 
   return {
     id: `weibo-${index + 1}-${hashTitle(item.title)}`,
@@ -85,6 +87,7 @@ const mapToHotTopic = (item: Weibo60sItem, index: number, maxHot: number): HotTo
     link: item.link,
     popularity: safeHot,
     industry: industry,
+    contentCategory,
     tags: [industry],
     summary: `微博热榜话题「${item.title}」当前热度值约 ${safeHot}，建议结合实时讨论窗口快速切入。`,
     trend: 'up',
