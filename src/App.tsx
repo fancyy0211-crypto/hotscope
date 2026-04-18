@@ -185,6 +185,262 @@ const EmptyState = ({ message = "暂无匹配热点", industrySuggestion }: { me
   </div>
 );
 
+const SUMMARY_BANNED_PATTERNS = [
+  /平台讨论/,
+  /讨论集中在/,
+  /成为关键主体/,
+  /热点跟进/,
+  /观点表达/,
+  /舆论发酵/,
+  /围绕该话题展开/,
+  /引发热议/,
+  /引发讨论/,
+  /相关争议/,
+  /事件相关方/,
+  /出现新的披露/
+];
+
+const normalizeSummaryLength = (text: string): string | null => {
+  const cleaned = text
+    .replace(/[“”"'`]/g, '')
+    .replace(/\s+/g, '')
+    .replace(/，+/g, '，')
+    .replace(/。+/g, '。')
+    .replace(/^[，。]+|[，。]+$/g, '');
+
+  if (!cleaned) return null;
+  if (cleaned.length < 40) return null;
+  if (cleaned.length > 80) return `${cleaned.slice(0, 79).replace(/[，。；]$/, '')}。`;
+  return `${cleaned.replace(/[。]$/, '')}。`;
+};
+
+const hasInformationGain = (title: string, summary: string) => {
+  const t = title.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+  const s = summary.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, '');
+  if (!t || !s) return false;
+  if (s === t) return false;
+  if (s.length - t.length < 10) return false;
+  if (s.includes(t) && s.length - t.length < 18) return false;
+  return /表示|宣布|回应|通报|处罚|被罚|取消|冲突|发布|分享|发生|结果|行为|举动/.test(summary);
+};
+
+const hasConcreteAction = (text: string) =>
+  /表示|宣布|回应|通报|处罚|被罚|取消|冲突|发布|发生|获胜|晋级|夺冠|下架|叫停/.test(text);
+
+const buildEventSummary = (topic: HotTopic): string | null => {
+  const title = (topic.title || '').trim();
+  const summarySeed = (topic.summary || '')
+    .replace(/建议[^。！!?]*[。！!?]?/g, '')
+    .replace(/适合[^。！!?]*[。！!?]?/g, '')
+    .trim();
+  const seed = `${title} ${summarySeed}`;
+
+  const buildByType = (): string | null => {
+    const isZhihuQuestion = topic.source === '知乎' || /为什么|如何|是否|怎么看|怎样|为啥/.test(title);
+    const isRednoteContent = topic.source === '小红书' || /教程|拍照|穿搭|分享|攻略|笔记|测评|经验|避坑/.test(title);
+    const isAbstractOpinion = /撕掉伪装|真面目|不装了|彻底变了|态度变了|立场变化|背后/.test(title);
+
+    const scoreMatch = seed.match(/\d+\s*[:：]\s*\d+/);
+    const moneyMatch = seed.match(/\d+(?:\.\d+)?\s*(?:亿|万|千)?\s*(?:元|人民币)/);
+    const actorVerbMatch = title.match(/^(.{1,12}?)(称|表示|宣布|回应|通报|辟谣|确认|否认|发布|指出|透露)(.+)$/);
+
+    if (isZhihuQuestion) {
+      const core = title
+        .replace(/^(为什么|如何|是否|怎么看|怎样|为啥)/, '')
+        .replace(/[？?]/g, '')
+        .trim();
+      return `围绕${core}这一现实问题，用户正在讨论其成因与影响，核心分歧在决策逻辑与结果判断。`;
+    }
+
+    if (isRednoteContent) {
+      return null;
+    }
+
+    if (actorVerbMatch) {
+      const actor = actorVerbMatch[1].trim();
+      const verb = actorVerbMatch[2].trim();
+      const action = actorVerbMatch[3].replace(/^[：:\s]+/, '').trim();
+      return `${actor}${verb}${action}，该表态使其策略影响与执行可行性成为焦点。`;
+    }
+
+    if (scoreMatch) {
+      return `${title}这场赛事出现${scoreMatch[0]}结果，相关队伍表现与后续走势成为焦点。`;
+    }
+
+    if (moneyMatch && /(被罚|处罚|罚款)/.test(seed)) {
+      const actor = title.split(/被罚|处罚|罚款/)[0].trim() || '相关企业';
+      return `${actor}因相关违规行为被处以约${moneyMatch[0]}处罚，处罚依据与企业责任边界成为焦点。`;
+    }
+
+    if (isAbstractOpinion) {
+      const country = seed.match(/日本|美国|中国|欧盟/)?.[0] || '相关方';
+      return `${country}近期的一项表态或举动被解读为立场变化，其真实意图与后续影响成为焦点。`;
+    }
+
+    if (/事件|事故|通报|冲突|发布|回应|取消|下架|停更|夺冠|获胜|晋级/.test(seed)) {
+      return `${title}对应事件已出现明确进展，相关主体动作与责任归属成为焦点。`;
+    }
+
+    return null;
+  };
+
+  const generated = buildByType();
+  if (!generated) return null;
+  const candidate = normalizeSummaryLength(generated);
+  if (!candidate) return null;
+  if (!hasConcreteAction(candidate)) return null;
+  if (SUMMARY_BANNED_PATTERNS.some((pattern) => pattern.test(candidate))) {
+    return null;
+  }
+  if (!hasInformationGain(title, candidate)) {
+    return null;
+  }
+  return candidate;
+};
+
+const HotTopicSummary = ({ topic }: { topic: HotTopic }) => {
+  const keywordTags: Array<{ regex: RegExp; tag: string }> = [
+    { regex: /回应|通报|声明|辟谣/, tag: '官方回应' },
+    { regex: /争议|冲突|质疑|翻车/, tag: '争议发酵' },
+    { regex: /反转|后续|再曝/, tag: '舆论反转' },
+    { regex: /明星|演唱会|综艺|影视|娱乐/, tag: '文娱讨论' },
+    { regex: /AI|芯片|科技|互联网|算法/, tag: '科技话题' },
+    { regex: /股市|黄金|经济|金融|投资/, tag: '财经波动' },
+    { regex: /警方|事故|事件|民生/, tag: '公共议题' },
+    { regex: /比赛|球员|联赛|夺冠/, tag: '体育热点' }
+  ];
+
+  const buildFocusTags = () => {
+    const seed = `${topic.title} ${topic.summary || ''}`;
+    const picks = keywordTags
+      .filter((item) => item.regex.test(seed))
+      .map((item) => item.tag);
+
+    const fallbackByCategory: Record<ContentCategory, string[]> = {
+      文娱: ['明星动态', '情绪共鸣', '话题发酵'],
+      生活: ['生活方式', '经验交流', '实用建议'],
+      社会: ['公共事件', '舆论讨论', '官方回应'],
+      体育: ['赛事进展', '胜负争议', '实时观点'],
+      ACG: ['圈层文化', '二创传播', '角色讨论'],
+      科技: ['技术趋势', '产品观点', '行业影响'],
+      财经: ['市场情绪', '资金流向', '风险判断'],
+      教育: ['政策变化', '学习路径', '家长关注'],
+      汽车: ['新车动态', '用车体验', '品牌讨论'],
+      游戏: ['版本更新', '玩家反馈', '竞技话题'],
+      更多: ['热点跟进', '观点表达', '舆论互动']
+    };
+
+    const merged = Array.from(new Set([...picks, ...fallbackByCategory[topic.contentCategory]]));
+    return merged.slice(0, 5);
+  };
+
+  const inferNature = () => {
+    const seed = `${topic.title} ${topic.summary || ''}`;
+    if (/争议|冲突|质疑|翻车|对立/.test(seed)) {
+      return {
+        label: '争议事件',
+        explanation: '当前讨论围绕观点冲突展开，适合用对比立场和事实拆解切入。'
+      };
+    }
+    if (/明星|演唱会|综艺|影视|偶像|CP/.test(seed)) {
+      return {
+        label: '娱乐话题',
+        explanation: '当前关注点以娱乐讨论和情绪表达为主，适合轻观点和互动型内容。'
+      };
+    }
+    if (/通报|发布|回应|消息|官方|政策/.test(seed)) {
+      return {
+        label: '资讯传播',
+        explanation: '当前热点以信息扩散为核心，适合快速解读与观点跟进。'
+      };
+    }
+    return {
+      label: '情绪驱动',
+      explanation: '当前以情绪表达和立场讨论为主，适合观点类内容切入。'
+    };
+  };
+
+  const [expanded, setExpanded] = useState(false);
+  const eventOverview = buildEventSummary(topic);
+  const shouldTruncate = !!eventOverview && eventOverview.length > 125;
+  const visibleOverview = shouldTruncate && !expanded
+    ? `${eventOverview?.slice(0, 125)}...`
+    : eventOverview;
+  const discussTags = buildFocusTags();
+  const nature = inferNature();
+
+  return (
+    <div className="rounded-2xl border border-sky-100 bg-sky-50/70 p-4 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[11px] font-black text-sky-700 uppercase tracking-wider">
+          <Info className="w-3.5 h-3.5" />
+          热点速览
+        </div>
+        <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600">
+          <span className="px-2 py-0.5 rounded-md bg-white border border-sky-100">{topic.source}</span>
+          <span>热度 {topic.hotnessScore}%</span>
+        </div>
+      </div>
+
+      {eventOverview && (
+        <div className="space-y-2">
+          <div className="text-[11px] font-black text-slate-700">事件概述</div>
+          <p className="text-[13px] leading-relaxed text-slate-700 font-medium">{visibleOverview}</p>
+          {shouldTruncate && (
+            <button
+              onClick={() => setExpanded((prev) => !prev)}
+              className="text-[11px] font-bold text-sky-600 hover:underline"
+            >
+              {expanded ? '收起' : '展开'}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <div className="text-[11px] font-black text-slate-700">讨论焦点</div>
+        <div className="flex flex-wrap gap-1.5">
+          {discussTags.map((tag) => (
+            <span key={tag} className="px-2 py-0.5 rounded-md border border-sky-100 bg-white text-[10px] font-bold text-sky-700">
+              #{tag}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <div className="text-[11px] font-black text-slate-700">热点性质</div>
+        <div className="text-[12px] font-bold text-slate-800">{nature.label}</div>
+        <p className="text-[11px] text-slate-600">{nature.explanation}</p>
+      </div>
+    </div>
+  );
+};
+
+const HotTopicLink = ({ topic }: { topic: HotTopic }) => {
+  if (!topic.link) return null;
+
+  const sourceActionLabelMap: Record<Source, string> = {
+    微博: '查看微博原帖',
+    抖音: '查看抖音视频',
+    知乎: '查看知乎讨论',
+    小红书: '查看小红书笔记'
+  };
+
+  return (
+    <a
+      href={topic.link}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-sleek-accent/20 bg-sleek-accent-soft text-sleek-accent text-[12px] font-black hover:bg-sleek-accent hover:text-white transition-all"
+      title={topic.link}
+    >
+      <ExternalLink className="w-3.5 h-3.5" />
+      {sourceActionLabelMap[topic.source] || '查看原始内容'}
+    </a>
+  );
+};
+
 const RecommendationBadge = ({ score, breakdown }: { score: number, breakdown?: ScoreBreakdown }) => {
   const [showExplanation, setShowExplanation] = useState(false);
   
@@ -1484,6 +1740,11 @@ const DetailPage = ({
                <span className="px-3 py-1 bg-sleek-sidebar text-sleek-text-secondary text-[10px] font-bold rounded-lg border border-sleek-border">{primaryIndustry}</span>
              </div>
 
+             <div className="space-y-3">
+               <HotTopicSummary topic={topic} />
+               <HotTopicLink topic={topic} />
+             </div>
+
              <div className={`p-6 rounded-3xl border shadow-sm ${
                decisionLevel === 'high'
                  ? 'bg-rose-50 border-rose-200'
@@ -1533,15 +1794,6 @@ const DetailPage = ({
                    <span key={label} className="px-2 py-0.5 rounded-md bg-white border border-sleek-border text-[10px] font-bold">{label}</span>
                  ))}
                </div>
-             </div>
-
-             <div className="p-6 bg-sleek-sidebar rounded-3xl border border-sleek-border relative overflow-hidden group">
-                <div className="absolute top-3 right-3 opacity-20 group-hover:opacity-40 transition-opacity">
-                  <Info className="w-4 h-4 text-sleek-text-secondary" />
-                </div>
-                <p className="text-sleek-text-main text-md leading-relaxed font-semibold relative z-10">
-                  “{topic.summary}”
-                </p>
              </div>
 
              <div className="grid grid-cols-5 gap-6">
