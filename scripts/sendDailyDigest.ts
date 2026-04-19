@@ -71,24 +71,17 @@ async function main() {
   }
 
   const selectedPlatforms = parsePlatforms(process.env.DAILY_DIGEST_PLATFORMS);
-  const selectedIndustries = parseList(process.env.DAILY_DIGEST_INDUSTRIES);
-
   console.log('[daily-digest] config:', {
     emailCount: emails.length,
-    selectedPlatforms,
-    selectedIndustries
+    selectedPlatforms
   });
 
   const allTopics = await fetchAllTopicsLite();
   console.log('[daily-digest] fetched topics:', allTopics.length);
 
-  const filteredTopics = allTopics.filter((topic) => {
-    const matchPlatform = selectedPlatforms.includes(topic.source);
-    const matchIndustry =
-      selectedIndustries.length === 0 ||
-      selectedIndustries.includes(topic.industry);
-    return matchPlatform && matchIndustry;
-  });
+  const filteredTopics = allTopics.filter((topic) =>
+    selectedPlatforms.includes(topic.source)
+  );
 
   if (filteredTopics.length === 0) {
     console.log('[daily-digest] Skip: no topics matched filters');
@@ -97,8 +90,7 @@ async function main() {
 
   const digestParams = buildDigestParams(
     filteredTopics,
-    selectedPlatforms,
-    selectedIndustries
+    selectedPlatforms
   );
 
   let successCount = 0;
@@ -133,4 +125,3 @@ main().catch((error) => {
   console.error('[daily-digest] fatal:', error);
   process.exit(1);
 });
-

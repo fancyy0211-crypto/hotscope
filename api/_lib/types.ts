@@ -4,7 +4,6 @@ export type TopicLite = {
   title: string;
   source: Source;
   link?: string;
-  industry: string;
   trend: 'up' | 'down' | 'stable';
   hotnessScore: number;
   opportunityScore: number;

@@ -1,17 +1,14 @@
-import { GeneratedTopic, HotTopic, Industry, StrategyKey, TrendDataPoint } from '../types';
+import { GeneratedTopic, HotTopic, StrategyKey, TrendDataPoint } from '../types';
 import { mapToContentCategory } from './contentCategory';
-
-type TrafficWindow = '24h' | '7d' | '30d';
-
-interface IndustryStat {
-  name: string;
-  heat: number;
-  growth: number;
-  opportunity: number;
-  status: string;
-}
-
-type IndustryTrafficPoint = Record<string, string | number>;
+import {
+  applyTopicPercentiles,
+  clampScore,
+  computeCompetitionScore,
+  computeGrowthScore,
+  computeHotnessScore,
+  computeOpportunityScore,
+  getOpportunityTypeByScores
+} from './topicScoring';
 
 interface WeiboTopicSourceLike {
   fetchCurrentWeiboTopics(): Promise<HotTopic[]>;
@@ -20,8 +17,6 @@ interface WeiboTopicSourceLike {
   fetchRefreshedWeiboTopics(currentTopics: HotTopic[]): Promise<{ topics: HotTopic[]; newCount: number }>;
   fetchGeneratedTopicTemplates(topicId: string): Promise<GeneratedTopic[]>;
   getStrategyStructureTemplates(): Record<StrategyKey, string[]>;
-  getIndustryStats(): IndustryStat[];
-  getIndustryTrafficByWindow(window: TrafficWindow): IndustryTrafficPoint[];
 }
 
 interface Weibo60sItem {
@@ -37,15 +32,6 @@ interface Weibo60sResponse {
 }
 
 const WEIBO_API_URL = 'https://60s.viki.moe/v2/weibo';
-
-const clampScore = (value: number) => Math.max(1, Math.min(100, Math.round(value)));
-
-const pickIndustry = (title: string): Industry => {
-  if (/经济|股市|黄金/.test(title)) return '金融 / 投资';
-  if (/明星|演唱会/.test(title)) return '广告 / 传媒 / 内容';
-  if (/AI|科技|芯片/i.test(title)) return '互联网 / 科技';
-  return '服务业';
-};
 
 const hashTitle = (title: string) => {
   let hash = 0;
@@ -73,12 +59,19 @@ const toRecommendation = (hotnessScore: number, opportunityScore: number): HotTo
   return '不建议';
 };
 
-const mapToHotTopic = (item: Weibo60sItem, index: number, maxHot: number): HotTopic => {
+const mapToHotTopic = (item: Weibo60sItem, index: number, total: number, maxHot: number): HotTopic => {
   const safeHot = Math.max(1, Number(item.hot_value) || 1);
-  const hotnessScore = clampScore((safeHot / maxHot) * 100);
-  const opportunityScore = clampScore(100 - index);
-  const industry = pickIndustry(item.title);
-  const contentCategory = mapToContentCategory(item.title);
+  const rankPercentile = total <= 1 ? 0 : index / (total - 1);
+  const hotnessScore = computeHotnessScore(safeHot, maxHot);
+  const growth = computeGrowthScore(rankPercentile, index, hotnessScore);
+  const competition = computeCompetitionScore(rankPercentile, hotnessScore, index);
+  const opportunityScore = computeOpportunityScore(rankPercentile, growth, competition);
+  const opportunityType = getOpportunityTypeByScores({ hotnessScore, opportunityScore });
+  const entryOpportunity = clampScore((100 - competition) * 0.45 + growth * 0.35 + rankPercentile * 100 * 0.2);
+  const contentCategory = mapToContentCategory(item.title, {
+    source: '微博',
+    summary: `微博热榜话题「${item.title}」当前热度值约 ${safeHot}`
+  });
 
   return {
     id: `weibo-${index + 1}-${hashTitle(item.title)}`,
@@ -86,25 +79,25 @@ const mapToHotTopic = (item: Weibo60sItem, index: number, maxHot: number): HotTo
     source: '微博',
     link: item.link,
     popularity: safeHot,
-    industry: industry,
     contentCategory,
-    tags: [industry],
+    tags: [contentCategory],
     summary: `微博热榜话题「${item.title}」当前热度值约 ${safeHot}，建议结合实时讨论窗口快速切入。`,
     trend: 'up',
     recommendation: toRecommendation(hotnessScore, opportunityScore),
     hotnessScore,
     opportunityScore,
+    opportunityType,
     breakdown: {
       hotness: {
         platform: hotnessScore,
-        growth: clampScore(hotnessScore - 6 + (index % 7)),
-        sustained: clampScore(hotnessScore - 10 + (index % 9)),
+        growth,
+        sustained: clampScore((hotnessScore + growth) / 2 - 8 + (index % 5)),
       },
       opportunity: {
-        fit: clampScore(opportunityScore - 5 + (index % 8)),
-        malleability: clampScore(opportunityScore - 8 + (index % 6)),
-        viral: clampScore(hotnessScore - 3 + (index % 5)),
-        competition: clampScore(100 - opportunityScore + 12),
+        fit: entryOpportunity,
+        malleability: entryOpportunity,
+        viral: clampScore((hotnessScore + growth) / 2 - 4 + (index % 5)),
+        competition,
       }
     },
     trendData: buildTrendData(hotnessScore, index),
@@ -138,7 +131,8 @@ export const createRealWeiboTopicSource = (fallbackSource: WeiboTopicSourceLike)
       }
 
       const maxHot = Math.max(...sanitized.map((item) => Number(item.hot_value) || 1), 1);
-      return sanitized.map((item, index) => mapToHotTopic(item, index, maxHot));
+      const mapped = sanitized.map((item, index) => mapToHotTopic(item, index, sanitized.length, maxHot));
+      return applyTopicPercentiles(mapped);
     } catch (error) {
       console.error('[RealWeiboTopicSource] fetchCurrentWeiboTopics failed, fallback to mock source:', error);
       return fallbackSource.fetchCurrentWeiboTopics();
@@ -173,13 +167,5 @@ export const createRealWeiboTopicSource = (fallbackSource: WeiboTopicSourceLike)
 
   getStrategyStructureTemplates(): Record<StrategyKey, string[]> {
     return fallbackSource.getStrategyStructureTemplates();
-  },
-
-  getIndustryStats(): IndustryStat[] {
-    return fallbackSource.getIndustryStats();
-  },
-
-  getIndustryTrafficByWindow(window: TrafficWindow): IndustryTrafficPoint[] {
-    return fallbackSource.getIndustryTrafficByWindow(window);
   }
 });

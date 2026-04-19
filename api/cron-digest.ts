@@ -31,36 +31,32 @@ const parsePlatforms = (value: string | undefined): Source[] => {
 const getTopicCompositeScore = (topic: TopicLite) =>
   topic.hotnessScore * 0.5 + topic.opportunityScore * 0.5;
 
-const getEmailReason = (topic: TopicLite, selectedIndustries: string[]): string => {
+const getEmailReason = (topic: TopicLite): string => {
   if (topic.hotnessScore > 80) return '热度高，处于爆发阶段';
   if (topic.trend === 'up') return '趋势上升，建议尽早介入';
-  if (selectedIndustries.includes(topic.industry)) return '与你关注的行业高度相关';
   return '具备稳定讨论基础，适合作为简报观察对象';
 };
 
 const buildDigestConclusion = (
   topics: TopicLite[],
-  selectedPlatforms: Source[],
-  selectedIndustries: string[]
+  selectedPlatforms: Source[]
 ): string => {
   if (topics.length === 0) {
-    return '今日暂无满足筛选条件的热点，建议适当放宽平台或行业筛选后再观察。';
+    return '今日暂无满足筛选条件的热点，建议适当放宽平台筛选后再观察。';
   }
   const top1 = [...topics].sort((a, b) => getTopicCompositeScore(b) - getTopicCompositeScore(a))[0];
   const trendText = top1.trend === 'up' ? '仍处于上升窗口' : top1.trend === 'down' ? '热度回落，建议谨慎跟进' : '处于稳定讨论期';
-  return `今日建议优先跟进「${top1.title}」，该话题在你关注的平台（${selectedPlatforms.join(' / ')}）与行业（${selectedIndustries.join(' / ')}）中机会值最高，${trendText}。`;
+  return `今日建议优先跟进「${top1.title}」，该话题在你关注的平台（${selectedPlatforms.join(' / ')}）中机会值最高，${trendText}。`;
 };
 
 const buildDigestParams = (
   topics: TopicLite[],
-  selectedPlatforms: Source[],
-  selectedIndustries: string[]
+  selectedPlatforms: Source[]
 ): Record<string, string> => {
   const topTopics = [...topics].sort((a, b) => getTopicCompositeScore(b) - getTopicCompositeScore(a)).slice(0, 3);
   const payload: Record<string, string> = {
     platforms: selectedPlatforms.join(' / '),
-    industries: selectedIndustries.join(' / '),
-    conclusion: buildDigestConclusion(topTopics, selectedPlatforms, selectedIndustries)
+    conclusion: buildDigestConclusion(topTopics, selectedPlatforms)
   };
 
   for (let i = 0; i < 3; i += 1) {
@@ -70,7 +66,7 @@ const buildDigestParams = (
     payload[`score${idx}`] = topic ? String(Math.round(getTopicCompositeScore(topic))) : '';
     payload[`platform${idx}`] = topic?.source || '';
     payload[`link${idx}`] = topic?.link || '';
-    payload[`reason${idx}`] = topic ? getEmailReason(topic, selectedIndustries) : '';
+    payload[`reason${idx}`] = topic ? getEmailReason(topic) : '';
   }
   return payload;
 };
@@ -117,25 +113,20 @@ export default async function handler(req: any, res: any) {
     }
 
     const selectedPlatforms = parsePlatforms(process.env.DAILY_DIGEST_PLATFORMS);
-    const selectedIndustries = parseList(process.env.DAILY_DIGEST_INDUSTRIES);
-
     const allTopics = await fetchAllTopicsLite();
     const filteredTopics = allTopics.filter((topic) => {
-      const matchPlatform = selectedPlatforms.includes(topic.source);
-      const matchIndustry = selectedIndustries.length === 0 || selectedIndustries.includes(topic.industry);
-      return matchPlatform && matchIndustry;
+      return selectedPlatforms.includes(topic.source);
     });
 
     if (filteredTopics.length === 0) {
       return res.status(200).json({
         ok: true,
         message: 'Skip: no topics matched env filters',
-        selectedPlatforms,
-        selectedIndustries
+        selectedPlatforms
       });
     }
 
-    const digestParams = buildDigestParams(filteredTopics, selectedPlatforms, selectedIndustries);
+    const digestParams = buildDigestParams(filteredTopics, selectedPlatforms);
 
     let successCount = 0;
     const failures: Array<{ email: string; error: string }> = [];

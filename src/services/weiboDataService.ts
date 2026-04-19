@@ -1,8 +1,6 @@
 import {
   mockGeneratedTopicsMap,
   mockHotTopics,
-  mockIndustryStats,
-  mockIndustryTrafficByWindow,
   refreshPool,
   strategyStructureTemplates,
 } from '../mockData';
@@ -12,18 +10,6 @@ import { createRealRednoteTopicSource } from './realRednoteTopicSource';
 import { createRealWeiboTopicSource } from './realWeiboTopicSource';
 import { createRealZhihuTopicSource } from './realZhihuTopicSource';
 
-export type TrafficWindow = '24h' | '7d' | '30d';
-
-export interface IndustryStat {
-  name: string;
-  heat: number;
-  growth: number;
-  opportunity: number;
-  status: string;
-}
-
-export type IndustryTrafficPoint = Record<string, string | number>;
-
 interface WeiboTopicSource {
   fetchCurrentWeiboTopics(): Promise<HotTopic[]>;
   fetchWeiboTopicById(topicId: string): Promise<HotTopic | null>;
@@ -31,8 +17,6 @@ interface WeiboTopicSource {
   fetchRefreshedWeiboTopics(currentTopics: HotTopic[]): Promise<{ topics: HotTopic[]; newCount: number }>;
   fetchGeneratedTopicTemplates(topicId: string): Promise<GeneratedTopic[]>;
   getStrategyStructureTemplates(): Record<StrategyKey, string[]>;
-  getIndustryStats(): IndustryStat[];
-  getIndustryTrafficByWindow(window: TrafficWindow): IndustryTrafficPoint[];
 }
 
 interface PlatformTopicSource {
@@ -97,13 +81,6 @@ class MockWeiboTopicSource implements WeiboTopicSource {
     return strategyStructureTemplates;
   }
 
-  getIndustryStats(): IndustryStat[] {
-    return mockIndustryStats.map((item) => ({ ...item }));
-  }
-
-  getIndustryTrafficByWindow(window: TrafficWindow): IndustryTrafficPoint[] {
-    return mockIndustryTrafficByWindow[window].map((item) => ({ ...item }));
-  }
 }
 
 const createMockPlatformFallback = (mockSource: MockWeiboTopicSource, source: Source): PlatformTopicSource => ({
@@ -161,8 +138,6 @@ export const weiboDataService = {
   fetchRefreshedWeiboTopics: (currentTopics: HotTopic[]) => source.fetchRefreshedWeiboTopics(currentTopics),
   fetchGeneratedTopicTemplates: (topicId: string) => source.fetchGeneratedTopicTemplates(topicId),
   getStrategyStructureTemplates: () => source.getStrategyStructureTemplates(),
-  getIndustryStats: () => source.getIndustryStats(),
-  getIndustryTrafficByWindow: (window: TrafficWindow) => source.getIndustryTrafficByWindow(window),
   fetchAllTopics: async (): Promise<HotTopic[]> => {
     const [weiboTopics, douyinTopics, zhihuTopics, rednoteTopics] = await Promise.all([
       platformSources['微博'].fetchCurrentTopics(),

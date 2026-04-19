@@ -1,17 +1,18 @@
-import { HotTopic, Industry, GeneratedTopic, ContentDirection, StrategyKey } from './types';
+import { HotTopic, GeneratedTopic, ContentDirection, StrategyKey } from './types';
 import { mapToContentCategory } from './services/contentCategory';
+import { getOpportunityTypeByScores } from './services/topicScoring';
 
-const industries: Industry[] = [
-  '互联网 / 科技',
-  '消费品 / 电商',
-  '金融 / 投资',
-  '教育 / 教培',
-  '医疗 / 健康',
-  '制造业 / 工业',
-  '房地产 / 城市',
-  '服务业',
-  '广告 / 传媒 / 内容',
-  '职场 / HR / 管理'
+const mockTopicSeeds = [
+  '苏超宿迁2:0南京',
+  '新能源绿牌褪色为白色',
+  '警方通报城市道路突发事故',
+  '明星综艺最新片段引热议',
+  'AI 大模型发布会公布新能力',
+  '股市午后拉升板块轮动明显',
+  '高考志愿填报规则更新',
+  '原神新版本角色技能曝光',
+  '万能旅行拍照姿势美美出片',
+  '泰国泼水节疑有人向人嘴里射毒水'
 ];
 
 const generateTrendData = () => {
@@ -33,23 +34,28 @@ const generateMockTopics = (): HotTopic[] => {
   const directions: ContentDirection[] = ['教程类', '观点类', '案例拆解', '实操类'];
 
   for (let i = 1; i <= 30; i++) {
-    const industry = industries[i % industries.length];
+    const seed = mockTopicSeeds[i % mockTopicSeeds.length];
     const trend = trends[i % 3];
     const rec = recommendations[i % 3];
+    const contentCategory = mapToContentCategory(seed, { source: '微博', summary: seed });
     
+    const hotnessScore = 60 + Math.floor(Math.random() * 40);
+    const opportunityScore = 50 + Math.floor(Math.random() * 50);
+    const opportunityType = getOpportunityTypeByScores({ hotnessScore, opportunityScore });
+
     topics.push({
       id: `${i}`,
-      title: `微博热榜 #${i}: ${industry}数字化转型升级的实战案例分析`,
+      title: `微博热榜 #${i}: ${seed}`,
       source: '微博',
       popularity: Math.floor(Math.random() * 1000000),
-      industry: industry,
-      contentCategory: mapToContentCategory(`微博热榜 #${i}: ${industry}数字化转型升级的实战案例分析`),
-      tags: [industry],
-      summary: `针对${industry}领域，分析了数字化转型过程中的核心痛点与成功路径。通过具体案例展示了如何利用新一代技术提高运营效率。`,
+      contentCategory,
+      tags: [contentCategory],
+      summary: `围绕「${seed}」的最新进展正在扩散，适合从事实拆解与内容切入角度跟进。`,
       trend,
       recommendation: rec,
-      hotnessScore: 60 + Math.floor(Math.random() * 40),
-      opportunityScore: 50 + Math.floor(Math.random() * 50),
+      hotnessScore,
+      opportunityScore,
+      opportunityType,
       trendData: generateTrendData(),
       isNew: i > 25,
       isProcessed: i % 4 === 0,
@@ -88,14 +94,14 @@ export const refreshPool: HotTopic[] = [
     title: '微博热榜快讯：2026 互联网技术峰会公布首批大模型商用标准',
     source: '微博',
     popularity: 920000,
-    industry: '互联网 / 科技',
-    contentCategory: mapToContentCategory('微博热榜快讯：2026 互联网技术峰会公布首批大模型商用标准'),
-    tags: ['互联网 / 科技'],
-    summary: '全球多家科技巨头联合发布了 AI 大模型的行业准入及合规使用白皮书，这标志着产业进入规范化轨道。',
+    contentCategory: mapToContentCategory('微博热榜快讯：2026 互联网技术峰会公布首批大模型商用标准', { source: '微博' }),
+    tags: ['科技'],
+    summary: '全球多家科技巨头联合发布了 AI 大模型准入及合规使用白皮书，这标志着产业进入规范化轨道。',
     trend: 'up',
     recommendation: '强推荐',
     hotnessScore: 94,
     opportunityScore: 98,
+    opportunityType: getOpportunityTypeByScores({ hotnessScore: 94, opportunityScore: 98 }),
     isNew: true,
     trendData: generateTrendData(),
     suggestedDirections: ['观点类', '实操类'],
@@ -124,7 +130,7 @@ export const mockGeneratedTopicsMap: Record<string, GeneratedTopic[]> = {
     },
     {
       id: 'refresh-res-2',
-      title: '行业标准发布后，谁会先吃到第一波增量',
+      title: '新标准发布后，谁会先吃到第一波增量',
       explanation: '通过角色视角拆解标准发布后的机会分层，帮助不同岗位找到自己的切入位。',
       structure: ['1. 机会分层图', '2. 岗位切入点', '3. 30 天行动建议'],
       platforms: ['微博'],
@@ -142,8 +148,8 @@ export const mockGeneratedTopicsMap: Record<string, GeneratedTopic[]> = {
   'default': [
     { 
       id: 'res-1',
-      title: '深度拆解：为什么你的行业一定要关注这个热点', 
-      explanation: '从行业宏观视角出发，结合热点事件分析其对普通从业者的深远影响。',
+      title: '深度拆解：为什么你一定要关注这个热点', 
+      explanation: '从宏观视角出发，结合热点事件分析其对普通用户与内容传播的深远影响。',
       structure: ['1. 现状回顾', '2. 热点冲击力分析', '3. 三个实操建议'],
       platforms: ['微博'],
       hook: '“如果你还在用旧逻辑经营，这个热点可能会让你在这个月颗粒无收。”' 
@@ -169,47 +175,7 @@ export const mockGeneratedTopicsMap: Record<string, GeneratedTopic[]> = {
 
 export const strategyStructureTemplates: Record<StrategyKey, string[]> = {
   comparison: ['对比维度', '差异分析', '优劣总结'],
-  analysis: ['问题提出', '原因分析', '行业影响', '解决方案'],
+  analysis: ['问题提出', '原因分析', '传播影响', '解决方案'],
   emotion: ['情绪共鸣', '用户故事', '价值认同', '行动引导'],
   toolkit: ['工具介绍', '使用步骤', '案例演示', '注意事项']
 };
-
-export const mockIndustryStats = [
-  { name: '互联网/科技', heat: 95, growth: 12, opportunity: 88, status: '热点爆发' },
-  { name: '消费品/电商', heat: 88, growth: 8, opportunity: 92, status: '稳步上升' },
-  { name: '教育/教培', heat: 65, growth: -5, opportunity: 40, status: '周期回调' },
-  { name: '金融/投资', heat: 78, growth: 15, opportunity: 85, status: '政策驱动' },
-  { name: '服务业', heat: 82, growth: 10, opportunity: 75, status: '稳健增长' },
-];
-
-export const mockIndustryTrafficByWindow = {
-  '24h': [
-    { time: '00:00', '互联网': 180, '电商': 120, '金融': 95 },
-    { time: '04:00', '互联网': 140, '电商': 110, '金融': 130 },
-    { time: '08:00', '互联网': 260, '电商': 180, '金融': 160 },
-    { time: '12:00', '互联网': 720, '电商': 360, '金融': 210 },
-    { time: '16:00', '互联网': 310, '电商': 640, '金融': 260 },
-    { time: '20:00', '互联网': 460, '电商': 280, '金融': 390 },
-    { time: '24:00', '互联网': 220, '电商': 170, '金融': 210 },
-  ],
-  '7d': [
-    { time: '周一', '互联网': 240, '电商': 210, '金融': 190 },
-    { time: '周二', '互联网': 260, '电商': 220, '金融': 198 },
-    { time: '周三', '互联网': 278, '电商': 235, '金融': 206 },
-    { time: '周四', '互联网': 292, '电商': 248, '金融': 214 },
-    { time: '周五', '互联网': 308, '电商': 262, '金融': 226 },
-    { time: '周六', '互联网': 324, '电商': 275, '金融': 236 },
-    { time: '周日', '互联网': 336, '电商': 288, '金融': 244 },
-  ],
-  '30d': [
-    { time: '第1周', '互联网': 180, '电商': 160, '金融': 150 },
-    { time: '第2周', '互联网': 260, '电商': 230, '金融': 205 },
-    { time: '第3周', '互联网': 350, '电商': 290, '金融': 250 },
-    { time: '第4周', '互联网': 300, '电商': 270, '金融': 235 },
-    { time: '第5周', '互联网': 240, '电商': 220, '金融': 210 },
-    { time: '第6周', '互联网': 320, '电商': 260, '金融': 238 },
-    { time: '第7周', '互联网': 410, '电商': 330, '金融': 280 },
-  ],
-} as const;
-
-export const mockIndustryTrafficData = mockIndustryTrafficByWindow['24h'];

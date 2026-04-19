@@ -1,46 +1,31 @@
 export type Source = '微博' | '抖音' | '知乎' | '小红书';
 
-export type Industry = 
-  | '互联网 / 科技'
-  | '消费品 / 电商'
-  | '金融 / 投资'
-  | '教育 / 教培'
-  | '医疗 / 健康'
-  | '制造业 / 工业'
-  | '房地产 / 城市'
-  | '服务业'
-  | '广告 / 传媒 / 内容'
-  | '职场 / HR / 管理';
-
 export type RecommendationLevel = '强推荐' | '可跟进' | '不建议';
 export type ContentFormat = '图文' | '短视频';
 export type ContentCategory =
-  | '文娱'
-  | '生活'
   | '社会'
-  | '体育'
-  | 'ACG'
+  | '文娱生活'
   | '科技'
   | '财经'
-  | '教育'
   | '汽车'
-  | '游戏'
+  | '教育'
+  | '体育'
+  | 'ACG'
   | '更多';
 export type ContentStyle = '干货型' | '情绪共鸣' | '争议观点' | '热点解读';
 export type ContentDirection = '教程类' | '观点类' | '案例拆解' | '实操类';
 export type ContentGoal = '引流' | '转化' | '品牌' | '涨粉';
 export type StrategyKey = 'comparison' | 'analysis' | 'emotion' | 'toolkit';
+export type OpportunityType = '高热红海' | '上升窗口' | '黄金机会' | '强势窗口' | '潜力早期' | '观察区间';
 
 export type DigestPreference = {
   selectedPlatforms: Source[];
-  selectedIndustries: string[];
 };
 
 export type DigestSubscription = {
   enabled: boolean;
   emails: string[];
   selectedPlatforms: Source[];
-  selectedIndustries: string[];
 };
 
 export interface ScoreBreakdown {
@@ -75,14 +60,16 @@ export interface HotTopic {
   source: Source;
   link?: string;
   popularity: number;
-  industry?: Industry;
   contentCategory: ContentCategory;
-  tags: Industry[];
+  tags: string[];
   summary: string;
   trend: 'up' | 'down' | 'stable';
   recommendation: RecommendationLevel;
   hotnessScore: number;
   opportunityScore: number;
+  opportunityType: OpportunityType;
+  hotPercentile?: number;
+  opportunityPercentile?: number;
   breakdown: ScoreBreakdown;
   trendData: TrendDataPoint[];
   actionAdvice: ActionAdvice;
