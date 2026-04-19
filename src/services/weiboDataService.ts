@@ -100,7 +100,7 @@ const createMockPlatformFallback = (mockSource: MockWeiboTopicSource, source: So
   }
 });
 
-const ACTIVE_SOURCE: 'mock' | 'real' = 'real';
+const ACTIVE_SOURCE: 'mock' | 'real' = import.meta.env.VITE_TOPIC_SOURCE === 'mock' ? 'mock' : 'real';
 
 const mockSource = new MockWeiboTopicSource();
 const realWeiboSource = createRealWeiboTopicSource(mockSource);
